@@ -1,52 +1,45 @@
 -- BrakeMarker.lua
 -- Place visual braking reference markers on the track surface.
--- Markers render as a portico (gate) shape visible from a distance.
-
+-- Markers render as a portico (gate) shape with a label floating above.
 ---------------------------------------------------------------------
 -- Config
 ---------------------------------------------------------------------
-local MARKER_WIDTH       = 8     -- meters across the track
-local MARKER_THICKNESS   = 0.3   -- meters, thickness of bars/posts
-local MARKER_POST_HEIGHT = 3     -- meters, height of vertical posts
+local MARKER_WIDTH       = 6     -- meters across the track
+local MARKER_POST_WIDTH  = 0.3   -- meters, width of vertical posts
+local MARKER_POST_HEIGHT = 2     -- meters, height of vertical posts
+local MARKER_BAR_HEIGHT  = 0.3   -- meters, height of top/bottom bars
 local MARKER_COLOR       = rgbm(1, 0, 0, 0.7)
-
+local LABEL_COLOR        = rgbm(1, 1, 1, 1)
+local LABEL_SCALE        = 2
+local LABEL_OFFSET_Y     = 0.6   -- meters above the top bar
 ---------------------------------------------------------------------
 -- Key binding setup
 ---------------------------------------------------------------------
--- Available keys for the user to choose from
 local KEY_NAMES = {
   'A','B','C','D','E','F','G','H','I','J','K','L','M',
   'N','O','P','Q','R','S','T','U','V','W','X','Y','Z',
   '0','1','2','3','4','5','6','7','8','9',
 }
-
--- Map key name string -> ui.KeyIndex value
 local KEY_MAP = {}
 for _, name in ipairs(KEY_NAMES) do
   KEY_MAP[name] = ui.KeyIndex[name]
 end
-
--- Persistent settings (keybindings stored as strings)
 local settings = ac.storage{
   keyPlace = 'B',
   keyDelete = 'X',
-  keyClear = 'C',
 }
-
--- Resolve current key indices from settings
 local function getKeyIndex(name)
   return KEY_MAP[name] or ui.KeyIndex.B
 end
-
 ---------------------------------------------------------------------
 -- State
 ---------------------------------------------------------------------
 local sim = ac.getSim()
 local car = ac.getCar(0)
-
--- Each marker stores: { pos = vec3, right = vec3 }
 local markers = {}
-
+local editingIndex = nil  -- which marker label is being edited
+local editText = ''       -- text buffer for editing
+local isEditing = false   -- true while a text field has focus
 ---------------------------------------------------------------------
 -- Persistence helpers
 ---------------------------------------------------------------------
@@ -55,18 +48,17 @@ local function storageKey()
   local trackId = ac.getTrackFullID('') or 'track'
   return 'markers_' .. carId .. '_' .. trackId
 end
-
 local function saveMarkers()
   local data = {}
   for i, m in ipairs(markers) do
     data[i] = {
       px = m.pos.x, py = m.pos.y, pz = m.pos.z,
       rx = m.right.x, ry = m.right.y, rz = m.right.z,
+      label = m.label,
     }
   end
   ac.storage[storageKey()] = stringify(data, true)
 end
-
 local function loadMarkers()
   local raw = ac.storage[storageKey()]
   if not raw or raw == '' then return end
@@ -77,202 +69,212 @@ local function loadMarkers()
     markers[i] = {
       pos   = vec3(d.px, d.py, d.pz),
       right = vec3(d.rx, d.ry, d.rz),
+      label = d.label or ('Marker ' .. i),
     }
   end
 end
-
 loadMarkers()
-
 ---------------------------------------------------------------------
 -- Marker actions
 ---------------------------------------------------------------------
 local function placeMarker()
   local look = vec3(car.look.x, 0, car.look.z):normalize()
   local right = vec3.cross(look, vec3(0, 1, 0)):normalize()
+  local newIndex = #markers + 1
   table.insert(markers, {
     pos   = car.position:clone(),
     right = right,
+    label = 'Marker ' .. newIndex,
   })
   saveMarkers()
 end
-
 local function deleteMarker(index)
   if index >= 1 and index <= #markers then
     table.remove(markers, index)
+    if editingIndex == index then
+      editingIndex = nil
+      editText = ''
+    elseif editingIndex and editingIndex > index then
+      editingIndex = editingIndex - 1
+    end
     saveMarkers()
   end
 end
-
 local function clearMarkers()
   markers = {}
+  editingIndex = nil
+  editText = ''
   saveMarkers()
 end
-
 ---------------------------------------------------------------------
 -- Input (runs every frame)
+-- Hotkeys are DISABLED while editing a label
 ---------------------------------------------------------------------
 local prevPlace = false
 local prevDelete = false
-local prevClear = false
-
 function script.update(dt)
+  if isEditing then
+    -- Don't process hotkeys while typing
+    prevPlace = false
+    prevDelete = false
+    return
+  end
   local place  = ac.isKeyDown(getKeyIndex(settings.keyPlace))
   local delete = ac.isKeyDown(getKeyIndex(settings.keyDelete))
-  local clear  = ac.isKeyDown(getKeyIndex(settings.keyClear))
-
   if place  and not prevPlace  then placeMarker() end
   if delete and not prevDelete then deleteMarker(#markers) end
-  if clear  and not prevClear  then clearMarkers() end
-
   prevPlace  = place
   prevDelete = delete
-  prevClear  = clear
 end
-
 ---------------------------------------------------------------------
--- 3D rendering — portico (gate) shape
+-- 3D rendering — portico + floating label
 ---------------------------------------------------------------------
-local markerShader = [[
-  float4 main(PS_IN pin) {
-    return gColor;
-  }
-]]
-
-local function drawQuad(p1, p2, p3, p4)
-  render.shaderedQuad({
-    p1 = p1, p2 = p2, p3 = p3, p4 = p4,
-    async = true,
-    blendMode = render.BlendMode.AlphaBlend,
-    depthMode = render.DepthMode.ReadOnly,
-    cullMode  = render.CullMode.None,
-    values    = { gColor = MARKER_COLOR },
-    shader    = markerShader,
-  })
-end
-
-function script.draw3D()
+function script.draw3D(dt)
   if #markers == 0 then return end
 
   local halfW = MARKER_WIDTH * 0.5
-  local halfT = MARKER_THICKNESS * 0.5
   local up    = vec3(0, 1, 0)
 
   for _, m in ipairs(markers) do
-    local pos   = m.pos
+    local base  = m.pos + vec3(0, 0.05, 0)
     local right = m.right
-    local fwd   = vec3.cross(up, right):normalize()
 
-    -- Base positions at ground level (slightly above track)
-    local groundY = vec3(0, 0.02, 0)
-    local leftBottom  = pos + right * (-halfW) + groundY
-    local rightBottom = pos + right * ( halfW) + groundY
-    local leftTop     = leftBottom  + up * MARKER_POST_HEIGHT
-    local rightTop    = rightBottom + up * MARKER_POST_HEIGHT
+    local leftBase   = base + right * (-halfW)
+    local rightBase  = base + right * ( halfW)
+    local leftTop    = leftBase  + up * MARKER_POST_HEIGHT
+    local rightTop   = rightBase + up * MARKER_POST_HEIGHT
 
-    -- 1. Ground bar (flat on track, full width)
-    drawQuad(
-      leftBottom  + fwd * (-halfT),
-      rightBottom + fwd * (-halfT),
-      rightBottom + fwd * ( halfT),
-      leftBottom  + fwd * ( halfT)
+    -- Bottom bar
+    render.quad(
+      leftBase,
+      rightBase,
+      rightBase + up * MARKER_BAR_HEIGHT,
+      leftBase  + up * MARKER_BAR_HEIGHT,
+      MARKER_COLOR
+    )
+    -- Left post
+    render.quad(
+      leftBase,
+      leftBase + right * MARKER_POST_WIDTH,
+      leftBase + right * MARKER_POST_WIDTH + up * MARKER_POST_HEIGHT,
+      leftTop,
+      MARKER_COLOR
+    )
+    -- Right post
+    render.quad(
+      rightBase + right * (-MARKER_POST_WIDTH),
+      rightBase,
+      rightTop,
+      rightBase + right * (-MARKER_POST_WIDTH) + up * MARKER_POST_HEIGHT,
+      MARKER_COLOR
+    )
+    -- Top bar
+    render.quad(
+      leftTop  + up * (-MARKER_BAR_HEIGHT),
+      rightTop + up * (-MARKER_BAR_HEIGHT),
+      rightTop,
+      leftTop,
+      MARKER_COLOR
     )
 
-    -- 2. Left post (vertical, at left end)
-    drawQuad(
-      leftBottom + fwd * (-halfT),
-      leftBottom + fwd * ( halfT),
-      leftTop    + fwd * ( halfT),
-      leftTop    + fwd * (-halfT)
-    )
-
-    -- 3. Right post (vertical, at right end)
-    drawQuad(
-      rightBottom + fwd * (-halfT),
-      rightBottom + fwd * ( halfT),
-      rightTop    + fwd * ( halfT),
-      rightTop    + fwd * (-halfT)
-    )
-
-    -- 4. Top bar (horizontal, at post height, full width)
-    drawQuad(
-      leftTop  + fwd * (-halfT),
-      rightTop + fwd * (-halfT),
-      rightTop + fwd * ( halfT),
-      leftTop  + fwd * ( halfT)
-    )
+    -- Label above the portico
+    local labelPos = base + up * (MARKER_POST_HEIGHT + LABEL_OFFSET_Y)
+    render.debugText(labelPos, m.label, LABEL_COLOR, LABEL_SCALE)
   end
 end
-
 ---------------------------------------------------------------------
 -- ImGui window
 ---------------------------------------------------------------------
--- Helper: find index of a value in KEY_NAMES
 local function keyNameIndex(name)
   for i, k in ipairs(KEY_NAMES) do
-    if k == name then return i - 1 end  -- 0-based for ui.combo
+    if k == name then return i - 1 end
   end
-  return 1  -- default to 'B'
+  return 1
 end
-
--- Build a single string with all key names for ui.combo
 local KEY_COMBO_STR = table.concat(KEY_NAMES, '\0') .. '\0'
 
 function script.windowMain(dt)
   local carId   = ac.getCarID(0) or '?'
   local trackId = ac.getTrackFullID('') or '?'
-
   ui.text('Car: ' .. carId)
   ui.text('Track: ' .. trackId)
   ui.separator()
 
-  -- Keybinding config
+  -- Key bindings
   ui.text('Key bindings:')
-
+  ui.pushItemWidth(50)
   local changed, newIdx
-
-  ui.pushItemWidth(60)
-
-  ui.text('Place:')
-  ui.sameLine(80)
-  changed, newIdx = ui.combo('##keyPlace', keyNameIndex(settings.keyPlace), KEY_COMBO_STR)
+  changed, newIdx = ui.combo('Place##keyPlace', keyNameIndex(settings.keyPlace), KEY_COMBO_STR)
   if changed then settings.keyPlace = KEY_NAMES[newIdx + 1] end
-
-  ui.text('Delete:')
-  ui.sameLine(80)
-  changed, newIdx = ui.combo('##keyDelete', keyNameIndex(settings.keyDelete), KEY_COMBO_STR)
+  changed, newIdx = ui.combo('Delete last##keyDelete', keyNameIndex(settings.keyDelete), KEY_COMBO_STR)
   if changed then settings.keyDelete = KEY_NAMES[newIdx + 1] end
-
-  ui.text('Clear:')
-  ui.sameLine(80)
-  changed, newIdx = ui.combo('##keyClear', keyNameIndex(settings.keyClear), KEY_COMBO_STR)
-  if changed then settings.keyClear = KEY_NAMES[newIdx + 1] end
-
   ui.popItemWidth()
   ui.separator()
 
-  -- Place & clear buttons
+  -- Place button
   ui.text('Markers: ' .. #markers)
   if ui.button('Place marker  [' .. settings.keyPlace .. ']', vec2(-0.1, 0)) then
     placeMarker()
   end
-  if ui.button('Clear all     [' .. settings.keyClear .. ']', vec2(-0.1, 0)) then
-    clearMarkers()
-  end
-  ui.separator()
 
-  -- Marker list with individual delete buttons
+  -- Clear all — button only, no hotkey
   if #markers > 0 then
-    ui.text('Click to delete:')
-    local toDelete = nil
-    for i = 1, #markers do
-      if ui.button('X##del' .. i) then
-        toDelete = i
-      end
-      ui.sameLine(0, 8)
-      ui.text('Marker ' .. i)
+    if ui.button('Clear all markers', vec2(-0.1, 0)) then
+      clearMarkers()
     end
+  end
+
+  -- Marker list with labels and edit/delete
+  if #markers > 0 then
+    ui.separator()
+    -- Track if any text field is active this frame
+    local anyEditing = false
+    local toDelete = nil
+
+    for i, m in ipairs(markers) do
+      if editingIndex == i then
+        -- Editing mode
+        anyEditing = true
+        -- Capture keyboard so hotkeys and game controls don't fire
+        ui.captureKeyboard()
+
+        ui.pushItemWidth(-0.1)
+        local newText, textChanged, enterPressed = ui.inputText('##label' .. i, editText)
+        editText = newText
+        ui.popItemWidth()
+
+        if ui.button('Save##save' .. i, vec2(55, 0)) or enterPressed then
+          m.label = editText
+          editingIndex = nil
+          editText = ''
+          saveMarkers()
+        end
+        ui.sameLine(0, 4)
+        if ui.button('Cancel##cancel' .. i) then
+          editingIndex = nil
+          editText = ''
+        end
+      else
+        -- Display mode
+        if ui.button('X##del' .. i, vec2(25, 0)) then
+          toDelete = i
+        end
+        ui.sameLine(0, 4)
+        ui.text(m.label)
+        ui.sameLine(0, 8)
+        if ui.button('Edit##edit' .. i, vec2(40, 0)) then
+          editingIndex = i
+          editText = m.label
+        end
+      end
+    end
+
+    isEditing = anyEditing
+
     if toDelete then
       deleteMarker(toDelete)
     end
+  else
+    isEditing = false
   end
 end
