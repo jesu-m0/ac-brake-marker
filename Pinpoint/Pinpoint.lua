@@ -1,4 +1,4 @@
--- BrakeMarker.lua
+-- Pinpoint.lua
 -- Place visual braking reference markers on the track surface.
 -- Markers render as a portico (gate) shape with a 3D label sign above.
 ---------------------------------------------------------------------

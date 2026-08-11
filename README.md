@@ -1,4 +1,4 @@
-# BrakeMarker
+# Pinpoint
 
 A CSP Lua app for Assetto Corsa that lets you place custom braking reference markers on the track by pressing a button. Red lines are painted across the track surface so you can see them from a distance as you approach.
 
@@ -9,18 +9,18 @@ A CSP Lua app for Assetto Corsa that lets you place custom braking reference mar
 
 ## Installation
 
-1. Copy the `BrakeMarker/` folder into your Assetto Corsa Lua apps directory:
+1. Copy the `Pinpoint/` folder into your Assetto Corsa Lua apps directory:
 
    ```
-   <Assetto Corsa>/apps/lua/BrakeMarker/
+   <Assetto Corsa>/apps/lua/Pinpoint/
    ```
 
    Typical Steam path:
    ```
-   C:\Program Files (x86)\Steam\steamapps\common\assettocorsa\apps\lua\BrakeMarker\
+   C:\Program Files (x86)\Steam\steamapps\common\assettocorsa\apps\lua\Pinpoint\
    ```
 
-2. Launch Assetto Corsa, go to **Settings > General > UI Modules** and enable **Brake Marker**.
+2. Launch Assetto Corsa, go to **Settings > General > UI Modules** and enable **Pinpoint**.
 
 3. In a session, open the app from the sidebar to see the control panel.
 
@@ -48,7 +48,7 @@ When you press **B**, the app captures your car's position and heading. It calcu
 
 ## Configuration
 
-You can tweak these constants at the top of [BrakeMarker.lua](BrakeMarker/BrakeMarker.lua):
+You can tweak these constants at the top of [Pinpoint.lua](Pinpoint/Pinpoint.lua):
 
 | Constant | Default | Description |
 |----------|---------|-------------|
